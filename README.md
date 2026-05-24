@@ -97,3 +97,4 @@ python -m bot.main
 
 - вкладка `Actions` в GitHub -> workflow `Deploy To VPS`
 - на сервере: `cd /root/tg-cognitive-bot && docker compose ps`
+
