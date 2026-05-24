@@ -764,6 +764,23 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_broadcast_top_errors(self, run_id: int, limit: int = 3) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT error_text, COUNT(*) AS cnt
+                FROM broadcast_attempts
+                WHERE run_id = ?
+                  AND status IN ('failed', 'blocked')
+                  AND COALESCE(error_text, '') <> ''
+                GROUP BY error_text
+                ORDER BY cnt DESC, id DESC
+                LIMIT ?
+                """,
+                (int(run_id), int(limit)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_admin_delivery_kpi_last_days(self, days: int = 7) -> dict:
         with self._connect() as conn:
             row = conn.execute(

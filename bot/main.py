@@ -942,12 +942,22 @@ def _basic_context_gate(mode: str, text: str) -> str | None:
     if len(words) < 6:
         return "need_context_min"
 
+    # If user gave enough detail in one message, don't force rigid templates.
+    if len(words) >= 20:
+        return None
+
     lowered = text.lower()
     if mode == "razbor":
-        # Long detailed messages should pass even if they don't fit strict templates.
-        if len(words) >= 20:
+        # Medium detailed messages should pass when they contain event + intent signals.
+        if len(words) >= 12 and any(
+            token in lowered
+            for token in (
+                "произош", "случил", "написал", "сказал", "сделал", "получил", "было", "есть",
+                "проблем", "ситуац", "отношен", "деньг", "конфликт", "вчера", "сегодня", "недел",
+                "месяц", "поссор", "разъех", "план", "цель", "как быть", "помоги",
+            )
+        ):
             return None
-
         has_fact = any(
             token in lowered
             for token in (
@@ -967,12 +977,21 @@ def _basic_context_gate(mode: str, text: str) -> str | None:
             return "need_razbor_structure"
 
     if mode == "plan":
+        # Plan flow should accept natural text if enough detail exists.
         if len(words) < 8:
             return "need_plan_input"
+        if len(words) >= 12 and any(token in lowered for token in ("цель", "хочу", "срок", "время", "ресурс", "дедлайн", "нужно")):
+            return None
 
     if mode == "audit":
+        # Audit flow should accept natural text if decision intent is visible.
         if len(words) < 8:
             return "need_audit_input"
+        if len(words) >= 10 and any(
+            token in lowered
+            for token in ("стоит", "делать", "решение", "выбор", "риск", "сделаю", "планирую", "go", "no-go")
+        ):
+            return None
 
     return None
 
@@ -1011,6 +1030,18 @@ def _context_reply_from_llm(payload: dict[str, Any], source_text: str) -> str | 
     enough = payload.get("enough_context")
     if enough is not False:
         return None
+
+    # If LLM gave usable substance, don't hard-block the user with "not enough context".
+    hard_truth = str(payload.get("hard_truth", "") or "").strip()
+    core = str(payload.get("problem_core", "") or payload.get("decision_summary", "") or "").strip()
+    if len(_normalize_text_tokens(source_text)) >= 10 and (hard_truth or core):
+        blocks = []
+        if core:
+            blocks.append(section("🧠 Что уже видно", _sanitize_style(core)))
+        if hard_truth:
+            blocks.append(section("⚡ Прямой вывод", _sanitize_style(hard_truth)))
+        blocks.append("Для точности добавь 1-2 факта (цифры/срок/что уже сделал).")
+        return "\n\n".join(blocks)
 
     missing = payload.get("missing_context")
     questions = payload.get("clarifying_questions")
@@ -1764,9 +1795,12 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     text = "\n\n".join(
         [
             "Когнитивный Навигатор",
-            "Режимы без дублей: Разбор (кейс 24–72ч), Reality Check (аудит 30–90д), План, Проверка решения.",
-            "Пишешь проблему — получаешь жесткий, понятный и полезный разбор.",
-            "Можно отправлять **текст и голосовые**.",
+            "Пишешь проблему — получаешь жесткий, понятный и полезный разбор без воды.",
+            "Можно отправлять текст и голосовые.",
+            "С чего начать за 30 секунд:\n"
+            "• Нажми «🧠 Разбор ситуации» и пришли 3 строки: что случилось / что уже сделал / какой итог нужен.\n"
+            "• Если нужен аудит всей траектории на 30–90 дней — «🧭 Reality Check».",
+            "Режимы: разбор кейса, план действий, проверка решения, reality-аудит, прогресс.",
         ]
     )
     await message.answer(text, reply_markup=main_menu(_is_admin(message.from_user.id)))
@@ -1936,10 +1970,12 @@ async def cmd_plan(message: Message, state: FSMContext) -> None:
     _touch_user(message.from_user.id, "cmd:plan")
     await state.set_state(PlanStates.intake)
     await message.answer(
-        "Для плана пришли:\n"
+        "🗺️ План действий = как дойти до цели по шагам.\n"
+        "Пришли одним сообщением:\n"
         "1) Цель\n"
         "2) Ограничения (время/ресурс)\n"
-        "3) Срок"
+        "3) Срок\n"
+        "4) Что уже пробовал (если есть)"
     )
 
 
@@ -1958,9 +1994,11 @@ async def cmd_audit(message: Message, state: FSMContext) -> None:
     _touch_user(message.from_user.id, "cmd:audit")
     await state.set_state(AuditStates.intake)
     await message.answer(
-        "Для проверки решения пришли:\n"
+        "🧪 Проверка решения = идти в действие или тормозить.\n"
+        "Пришли:\n"
         "1) Ситуацию\n"
-        "2) Какое действие ты собираешься сделать"
+        "2) Какое действие ты собираешься сделать\n"
+        "3) Что рискуешь потерять при ошибке"
     )
 
 
@@ -2069,11 +2107,13 @@ async def cmd_stats(message: Message) -> None:
     next_step = _progress_next_step(progress)
     reality_quality = int(reality.get("profile_quality", 0) or 0)
     reality_updated = str(reality.get("updated_at", "") or "нет")
+    target_daily_sessions = max(1, 7 - int(progress["sessions_7d"]))
+    weekly_pace = "в норме" if progress["sessions_7d"] >= 7 else "ниже цели"
 
     text = "\n\n".join(
         [
             section(
-                "🏆 Профиль прогресса",
+                "🏆 Сводка прогресса",
                 (
                     f"• Очки: {score}\n"
                     f"• Уровень {level}: {bar} ({inside}/{target})\n"
@@ -2086,7 +2126,8 @@ async def cmd_stats(message: Message) -> None:
                 (
                     f"• Сессий: {progress['sessions_7d']}\n"
                     f"• Активных дней: {progress['active_days_7d']}/7\n"
-                    f"• Среднее снижение эмоции: {avg_delta}"
+                    f"• Среднее снижение эмоции: {avg_delta}\n"
+                    f"• Темп: {weekly_pace}"
                 ),
             ),
             section("🎯 Рабочие режимы", mode_rank_text),
@@ -2099,9 +2140,15 @@ async def cmd_stats(message: Message) -> None:
                     f"• Обновлен: {reality_updated}"
                 ),
             ),
+            section("📌 Приоритет на сегодня", next_step),
+            section(
+                "🎯 Цель до конца недели",
+                (
+                    f"• {challenge}\n"
+                    f"• Чтобы выйти в ритм: минимум {target_daily_sessions} сесс. до конца недели"
+                ),
+            ),
             section("🎖 Бейджи", badges_text),
-            section("🔥 Фокус недели", challenge),
-            section("➡️ Следующий шаг", next_step),
         ]
     )
     await message.answer(text)
@@ -2198,9 +2245,16 @@ async def cmd_admin_runs(message: Message) -> None:
         return
     lines = []
     for run in runs:
+        total = int(run["total_targets"] or 0)
+        sent = int(run["sent_count"] or 0)
+        blocked = int(run["blocked_count"] or 0)
+        failed = int(run["failed_count"] or 0)
+        sent_pct = (sent / total * 100.0) if total else 0.0
+        blocked_pct = (blocked / total * 100.0) if total else 0.0
+        failed_pct = (failed / total * 100.0) if total else 0.0
         lines.append(
-            f"• #{run['id']} | {_broadcast_segment_label(run['segment'])} | sent {run['sent_count']}/{run['total_targets']} "
-            f"| block {run['blocked_count']} | fail {run['failed_count']} | retry {run['retry_count']}"
+            f"• #{run['id']} | {_broadcast_segment_label(run['segment'])} | sent {sent}/{total} ({sent_pct:.0f}%) "
+            f"| block {blocked} ({blocked_pct:.0f}%) | fail {failed} ({failed_pct:.0f}%) | retry {run['retry_count']}"
         )
     await message.answer(
         section("📬 Последние рассылки", "\n".join(lines)),
@@ -2508,6 +2562,20 @@ async def admin_broadcast_confirm(message: Message, state: FSMContext) -> None:
         created_by_tg_id=message.from_user.id,
         max_retries=BROADCAST_MAX_RETRIES,
     )
+    total_targets = int(report["targets"] or 0)
+    sent_count = int(report["sent"] or 0)
+    blocked_count = int(report["blocked"] or 0)
+    failed_count = int(report["failed"] or 0)
+    sent_pct = (sent_count / total_targets * 100.0) if total_targets else 0.0
+    blocked_pct = (blocked_count / total_targets * 100.0) if total_targets else 0.0
+    failed_pct = (failed_count / total_targets * 100.0) if total_targets else 0.0
+    top_errors_rows = STORAGE.get_broadcast_top_errors(int(report["run_id"]), limit=3)
+    top_errors_text = "• нет"
+    if top_errors_rows:
+        top_errors_text = "\n".join(
+            f"• {str(row.get('error_text') or '').strip()[:90]} ({int(row.get('cnt') or 0)})"
+            for row in top_errors_rows
+        )
     await state.clear()
     await message.answer(
         section(
@@ -2516,11 +2584,12 @@ async def admin_broadcast_confirm(message: Message, state: FSMContext) -> None:
                 f"• Run: #{report['run_id']}\n"
                 f"• Сегмент: {_broadcast_segment_label(str(report['segment']))}\n"
                 f"• Целей: {report['targets']}\n"
-                f"• Доставлено: {report['sent']}\n"
-                f"• Блок: {report['blocked']}\n"
-                f"• Ошибки: {report['failed']}\n"
+                f"• Доставлено: {report['sent']} ({sent_pct:.1f}%)\n"
+                f"• Блок: {report['blocked']} ({blocked_pct:.1f}%)\n"
+                f"• Ошибки: {report['failed']} ({failed_pct:.1f}%)\n"
                 f"• Повторы: {report['retries']}\n"
                 f"• Топ-ошибка: {report['error_top'] or 'нет'}\n\n"
+                f"Топ причин ошибок:\n{top_errors_text}\n\n"
                 "Дальше:\n"
                 "• /admin_runs — история запусков\n"
                 "• /admin_users — статус аудитории"
