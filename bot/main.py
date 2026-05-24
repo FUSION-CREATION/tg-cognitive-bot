@@ -55,6 +55,18 @@ BTN_AUDIT = "🧪 Проверка решения"
 BTN_REALITY = "🧭 Reality Check"
 BTN_STATS = "📊 Мой прогресс"
 BTN_ADMIN_PANEL = "🛠 Админ-панель"
+BTN_ADMIN_BROADCAST = "📣 Рассылка"
+BTN_ADMIN_USERS = "👥 Пользователи"
+BTN_ADMIN_EVENTS = "🧾 События"
+BTN_ADMIN_COST = "💸 Расходы"
+BTN_ADMIN_STATUS = "📈 Статус/KPI"
+BTN_ADMIN_RUNS = "📦 История рассылок"
+BTN_ADMIN_ADMINS = "🔐 Админы"
+BTN_ADMIN_HELP = "❓ Help админки"
+BTN_BACK_MAIN = "⬅️ В меню"
+BTN_BROADCAST_SEND = "✅ Отправить"
+BTN_BROADCAST_EDIT = "✏️ Изменить контент"
+BTN_BROADCAST_CANCEL = "🛑 Отмена"
 
 PANIC_MARKERS = (
     "паник", "задыха", "сердце", "сердцеби", "тряс", "не могу дышать", "приступ", "пульс", "сильная тревога",
@@ -123,6 +135,7 @@ MENU_ALIAS_MAP: dict[str, str] = {
     "/stats": "stats",
     BTN_ADMIN_PANEL.lower(): "admin_panel",
     "админ панель": "admin_panel",
+    "/admin": "admin_panel",
     "/admin_panel": "admin_panel",
     "/helpa": "helpa",
 }
@@ -147,6 +160,47 @@ def main_menu(include_admin: bool = False) -> ReplyKeyboardMarkup:
         keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder="Опиши ситуацию или отправь голосовое.",
+    )
+
+
+def admin_panel_menu(include_root_actions: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=BTN_ADMIN_BROADCAST), KeyboardButton(text=BTN_ADMIN_RUNS)],
+        [KeyboardButton(text=BTN_ADMIN_USERS), KeyboardButton(text=BTN_ADMIN_EVENTS)],
+        [KeyboardButton(text=BTN_ADMIN_COST), KeyboardButton(text=BTN_ADMIN_STATUS)],
+        [KeyboardButton(text=BTN_ADMIN_ADMINS), KeyboardButton(text=BTN_ADMIN_HELP)],
+    ]
+    if include_root_actions:
+        rows.append([KeyboardButton(text="➕ Выдать админку"), KeyboardButton(text="➖ Снять админку")])
+        rows.append([KeyboardButton(text="🧹 Очистка логов")])
+    rows.append([KeyboardButton(text=BTN_BACK_MAIN)])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Выбери действие в админке.",
+    )
+
+
+def broadcast_segment_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="1) 👥 Все"), KeyboardButton(text="2) ⚡ Активные 24ч")],
+            [KeyboardButton(text="3) 🔥 Активные 7д"), KeyboardButton(text="4) 💎 5+ сессий за 7д")],
+            [KeyboardButton(text=BTN_BROADCAST_CANCEL)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выбери сегмент рассылки.",
+    )
+
+
+def broadcast_confirm_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_BROADCAST_SEND), KeyboardButton(text=BTN_BROADCAST_EDIT)],
+            [KeyboardButton(text=BTN_BROADCAST_CANCEL)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Подтверди рассылку.",
     )
 
 
@@ -260,7 +314,7 @@ def _admin_help_text() -> str:
             section(
                 "🛠 Админ-команды",
                 (
-                    "• /admin_panel — панель действий\n"
+                    "• /admin (или /admin_panel) — панель действий\n"
                     "• /admin_status — статус мониторинга и KPI\n"
                     "• /admin_users — кто активен/кто блокнул\n"
                     "• /admin_events — клики и действия\n"
@@ -268,6 +322,15 @@ def _admin_help_text() -> str:
                     "• /admin_broadcast — рассылка (текст/фото/голос) с предпросмотром\n"
                     "• /admin_runs — последние запуски рассылки\n"
                     "• /admin_cleanup — очистка старых логов"
+                ),
+            ),
+            section(
+                "📣 Как делать рассылку",
+                (
+                    "1) /admin_broadcast\n"
+                    "2) Выбери сегмент аудитории\n"
+                    "3) Пришли контент (текст, фото, фото+подпись, голос, аудио)\n"
+                    "4) Проверь предпросмотр и нажми «✅ Отправить»"
                 ),
             ),
             section(
@@ -283,22 +346,33 @@ def _admin_help_text() -> str:
 
 
 def _admin_panel_text() -> str:
-    return "\n".join(
+    return "\n\n".join(
         [
-            "Админ-панель. Ответь цифрой:",
-            "1) Пользователи",
-            "2) События",
-            "3) Расходы",
-            "4) Статус/KPI",
-            "5) Рассылка",
-            "6) Выдать админку (root)",
-            "7) Снять админку (root)",
-            "8) Список админов",
-            "9) Очистка логов",
-            "10) Help админки",
-            "0) Выйти",
+            "🛠 Админ-панель",
+            "Здесь можно управлять рассылками и смотреть метрики.\n"
+            "Используй кнопки ниже: так быстрее и без ошибок в командах.",
         ]
     )
+
+
+def _extract_choice_digit(text: str) -> str | None:
+    match = re.match(r"^\s*(\d+)", text or "")
+    if match:
+        return match.group(1)
+    return None
+
+
+def _broadcast_segment_overview() -> str:
+    lines: list[str] = []
+    for idx, (segment, label) in (
+        ("1", ("all", "Все")),
+        ("2", ("active_24h", "Активные 24ч")),
+        ("3", ("active_7d", "Активные 7д")),
+        ("4", ("power_7d", "Активные 5+ сессий за 7д")),
+    ):
+        count = len(STORAGE.get_broadcast_targets(include_blocked=False, segment=segment))
+        lines.append(f"{idx}) {label}: {count}")
+    return "\n".join(lines)
 
 
 def _touch_user(tg_id: int | None, event_type: str = "", payload: str = "") -> None:
@@ -1748,6 +1822,75 @@ async def menu_button_router(message: Message, state: FSMContext) -> None:
         await cmd_admin_panel(message, state)
 
 
+@router.message(
+    F.text.in_(
+        [
+            BTN_ADMIN_BROADCAST,
+            BTN_ADMIN_RUNS,
+            BTN_ADMIN_USERS,
+            BTN_ADMIN_EVENTS,
+            BTN_ADMIN_COST,
+            BTN_ADMIN_STATUS,
+            BTN_ADMIN_ADMINS,
+            BTN_ADMIN_HELP,
+            "➕ Выдать админку",
+            "➖ Снять админку",
+            "🧹 Очистка логов",
+            BTN_BACK_MAIN,
+        ]
+    )
+)
+async def admin_button_router(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    choice = (message.text or "").strip()
+    if choice == BTN_BACK_MAIN:
+        await state.clear()
+        await message.answer("Вернул обычное меню.", reply_markup=main_menu(True))
+        return
+    if choice == BTN_ADMIN_BROADCAST:
+        await cmd_admin_broadcast(message, state)
+        return
+    if choice == BTN_ADMIN_RUNS:
+        await cmd_admin_runs(message)
+        return
+    if choice == BTN_ADMIN_USERS:
+        await cmd_admin_users(message)
+        return
+    if choice == BTN_ADMIN_EVENTS:
+        await cmd_admin_events(message)
+        return
+    if choice == BTN_ADMIN_COST:
+        await cmd_admin_cost(message)
+        return
+    if choice == BTN_ADMIN_STATUS:
+        await cmd_admin_status(message)
+        return
+    if choice == BTN_ADMIN_ADMINS:
+        await cmd_admin_list(message)
+        return
+    if choice == BTN_ADMIN_HELP:
+        await cmd_helpa(message)
+        return
+    if choice == "➕ Выдать админку":
+        if _is_root_admin(message.from_user.id):
+            await cmd_admin_grant(message, state)
+        else:
+            await message.answer("Только root-админ может выдавать админку.")
+        return
+    if choice == "➖ Снять админку":
+        if _is_root_admin(message.from_user.id):
+            await cmd_admin_revoke(message, state)
+        else:
+            await message.answer("Только root-админ может снимать админку.")
+        return
+    if choice == "🧹 Очистка логов":
+        if _is_root_admin(message.from_user.id):
+            await cmd_admin_cleanup(message)
+        else:
+            await message.answer("Только root-админ может чистить логи.")
+
+
 @router.message(Command("razbor"))
 @router.message(F.text == BTN_RAZBOR)
 async def cmd_razbor(message: Message, state: FSMContext) -> None:
@@ -1969,7 +2112,7 @@ async def cmd_admin_cost(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
     _touch_user(message.from_user.id, "cmd:admin_cost")
-    await message.answer(_admin_cost_summary_text())
+    await message.answer(_admin_cost_summary_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("admin_status"))
@@ -1977,7 +2120,7 @@ async def cmd_admin_status(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
     _touch_user(message.from_user.id, "cmd:admin_status")
-    await message.answer(_admin_status_text())
+    await message.answer(_admin_status_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("helpa"))
@@ -1985,9 +2128,10 @@ async def cmd_helpa(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
     _touch_user(message.from_user.id, "cmd:helpa")
-    await message.answer(_admin_help_text())
+    await message.answer(_admin_help_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
+@router.message(Command("admin"))
 @router.message(Command("admin_panel"))
 async def cmd_admin_panel(message: Message, state: FSMContext) -> None:
     if not _is_admin(message.from_user.id):
@@ -1995,7 +2139,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext) -> None:
     _touch_user(message.from_user.id, "cmd:admin_panel")
     await state.clear()
     await state.set_state(AdminPanelStates.waiting_action)
-    await message.answer(_admin_panel_text())
+    await message.answer(_admin_panel_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("admin_users"))
@@ -2026,7 +2170,7 @@ async def cmd_admin_users(message: Message) -> None:
             section("🧾 Последние пользователи", details),
         ]
     )
-    await message.answer(text)
+    await message.answer(text, reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("admin_events"))
@@ -2040,7 +2184,7 @@ async def cmd_admin_events(message: Message) -> None:
         for e in events
     ]
     text = section("🕹 Последние клики", "\n".join(lines) if lines else "• нет данных")
-    await message.answer(text)
+    await message.answer(text, reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("admin_runs"))
@@ -2050,15 +2194,18 @@ async def cmd_admin_runs(message: Message) -> None:
     _touch_user(message.from_user.id, "cmd:admin_runs")
     runs = STORAGE.get_recent_broadcast_runs_summary(limit=5)
     if not runs:
-        await message.answer("Рассылок пока не было.")
+        await message.answer("Рассылок пока не было.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
         return
     lines = []
     for run in runs:
         lines.append(
-            f"• #{run['id']} {run['segment']} | sent {run['sent_count']}/{run['total_targets']} "
+            f"• #{run['id']} | {_broadcast_segment_label(run['segment'])} | sent {run['sent_count']}/{run['total_targets']} "
             f"| block {run['blocked_count']} | fail {run['failed_count']} | retry {run['retry_count']}"
         )
-    await message.answer(section("📬 Последние рассылки", "\n".join(lines)))
+    await message.answer(
+        section("📬 Последние рассылки", "\n".join(lines)),
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
+    )
 
 
 @router.message(Command("admin_list"))
@@ -2068,13 +2215,13 @@ async def cmd_admin_list(message: Message) -> None:
     _touch_user(message.from_user.id, "cmd:admin_list")
     admins = STORAGE.list_admins(limit=50)
     if not admins:
-        await message.answer("Список админов пуст.")
+        await message.answer("Список админов пуст.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
         return
     lines = []
     for row in admins:
         marker = " (root)" if _is_root_admin(row["tg_id"]) else ""
         lines.append(f"• {row['tg_id']}{marker} | by: {row.get('granted_by') or '-'} | {row.get('created_at') or '-'}")
-    await message.answer(section("🔐 Админы", "\n".join(lines)))
+    await message.answer(section("🔐 Админы", "\n".join(lines)), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
 @router.message(Command("admin_grant"))
@@ -2084,7 +2231,10 @@ async def cmd_admin_grant(message: Message, state: FSMContext) -> None:
     _touch_user(message.from_user.id, "cmd:admin_grant")
     await state.clear()
     await state.set_state(AdminAccessStates.waiting_grant_tg_id)
-    await message.answer("Пришли `tg_id`, которому выдать админку.", reply_markup=main_menu(_is_admin(message.from_user.id)))
+    await message.answer(
+        "Пришли `tg_id`, которому выдать админку.",
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
+    )
 
 
 @router.message(AdminAccessStates.waiting_grant_tg_id)
@@ -2099,7 +2249,10 @@ async def admin_grant_input(message: Message, state: FSMContext) -> None:
     target = int(raw)
     STORAGE.grant_admin(tg_id=target, granted_by=message.from_user.id, note="manual grant")
     await state.clear()
-    await message.answer(f"Выдал админку: `{target}`")
+    await message.answer(
+        f"Выдал админку: `{target}`",
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
+    )
 
 
 @router.message(Command("admin_revoke"))
@@ -2109,7 +2262,10 @@ async def cmd_admin_revoke(message: Message, state: FSMContext) -> None:
     _touch_user(message.from_user.id, "cmd:admin_revoke")
     await state.clear()
     await state.set_state(AdminAccessStates.waiting_revoke_tg_id)
-    await message.answer("Пришли `tg_id`, у которого снять админку.")
+    await message.answer(
+        "Пришли `tg_id`, у которого снять админку.",
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
+    )
 
 
 @router.message(AdminAccessStates.waiting_revoke_tg_id)
@@ -2128,7 +2284,10 @@ async def admin_revoke_input(message: Message, state: FSMContext) -> None:
         return
     STORAGE.revoke_admin(tg_id=target)
     await state.clear()
-    await message.answer(f"Снял админку: `{target}`")
+    await message.answer(
+        f"Снял админку: `{target}`",
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
+    )
 
 
 @router.message(Command("admin_cleanup"))
@@ -2147,7 +2306,8 @@ async def cmd_admin_cleanup(message: Message) -> None:
                 f"• Удалено admin_alerts: {report['deleted_admin_alerts']}\n"
                 f"• Удалено broadcast_attempts: {report['deleted_broadcast_attempts']}"
             ),
-        )
+        ),
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
     )
 
 
@@ -2159,12 +2319,11 @@ async def cmd_admin_broadcast(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdminBroadcastStates.waiting_segment)
     await message.answer(
-        "Выбери сегмент цифрой:\n"
-        "1) Все\n"
-        "2) Активные 24ч\n"
-        "3) Активные 7д\n"
-        "4) Активные 5+ сессий за 7д\n"
-        "Отмена: /cancel"
+        "📣 Мастер рассылки — Шаг 1/3\n"
+        "Выбери сегмент аудитории:\n\n"
+        f"{_broadcast_segment_overview()}\n\n"
+        "Можно нажать кнопку или отправить цифру 1-4.",
+        reply_markup=broadcast_segment_menu(),
     )
 
 
@@ -2179,6 +2338,9 @@ async def _admin_command_in_state(message: Message, state: FSMContext) -> bool:
         return True
     if cmd == "/helpa":
         await cmd_helpa(message)
+        return True
+    if cmd == "/admin":
+        await cmd_admin_panel(message, state)
         return True
     if cmd == "/admin_panel":
         await cmd_admin_panel(message, state)
@@ -2223,23 +2385,36 @@ async def admin_broadcast_segment(message: Message, state: FSMContext) -> None:
         return
     if await _admin_command_in_state(message, state):
         return
-    choice = (message.text or "").strip()
+    raw_choice = (message.text or "").strip()
+    if raw_choice == BTN_BROADCAST_CANCEL:
+        await state.clear()
+        await message.answer("Ок, рассылку отменил.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
+        return
+
+    choice = _extract_choice_digit(raw_choice) or raw_choice
     picked = BROADCAST_SEGMENTS.get(choice)
     if not picked:
-        await message.answer("Неверный выбор. Отправь 1, 2, 3 или 4.")
+        await message.answer("Неверный выбор. Нажми кнопку сегмента или отправь цифру 1-4.")
         return
     segment, label = picked
     targets = STORAGE.get_broadcast_targets(include_blocked=False, segment=segment)
     await state.update_data(broadcast_segment=segment, broadcast_label=label, broadcast_targets=len(targets))
     await state.set_state(AdminBroadcastStates.waiting_text)
     await message.answer(
+        "📣 Мастер рассылки — Шаг 2/3\n"
         f"Сегмент: {label}\n"
-        f"Оценка аудитории: {len(targets)}\n"
-        "Пришли контент рассылки:\n"
+        f"Оценка аудитории: {len(targets)}\n\n"
+        "Пришли контент одним сообщением:\n"
         "• текст\n"
         "• фото\n"
         "• фото + подпись\n"
-        "• голосовое/аудио (можно с подписью)"
+        "• голосовое/аудио (можно с подписью)\n\n"
+        "Если передумал: «🛑 Отмена»",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=BTN_BROADCAST_CANCEL)]],
+            resize_keyboard=True,
+            input_field_placeholder="Отправь контент рассылки.",
+        ),
     )
 
 
@@ -2250,9 +2425,13 @@ async def admin_broadcast_text(message: Message, state: FSMContext) -> None:
         return
     if await _admin_command_in_state(message, state):
         return
+    if (message.text or "").strip() == BTN_BROADCAST_CANCEL:
+        await state.clear()
+        await message.answer("Ок, рассылку отменил.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
+        return
     payload = _extract_broadcast_payload(message)
     if payload is None:
-        await message.answer("Нужен текст, фото, фото+подпись, голосовое или аудио.")
+        await message.answer("Неподдерживаемый формат. Нужны: текст, фото, фото+подпись, голосовое или аудио.")
         return
     data = await state.get_data()
     segment = str(data.get("broadcast_segment", "all"))
@@ -2263,14 +2442,19 @@ async def admin_broadcast_text(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminBroadcastStates.waiting_confirm)
     await message.answer(
         section(
-            "📣 Предпросмотр рассылки",
+            "📣 Мастер рассылки — Шаг 3/3 (предпросмотр)",
             (
                 f"• Сегмент: {label}\n"
                 f"• Получателей: {targets}\n\n"
                 f"{preview}\n\n"
-                "Отправить? Напиши: ДА"
+                "Проверь контент и нажми:\n"
+                f"• {BTN_BROADCAST_SEND}\n"
+                f"• {BTN_BROADCAST_EDIT}\n"
+                f"• {BTN_BROADCAST_CANCEL}"
             ),
         )
+        ,
+        reply_markup=broadcast_confirm_menu(),
     )
 
 
@@ -2281,10 +2465,31 @@ async def admin_broadcast_confirm(message: Message, state: FSMContext) -> None:
         return
     if await _admin_command_in_state(message, state):
         return
-    decision = (message.text or "").strip().lower()
-    if decision not in {"да", "yes", "y"}:
+    decision_raw = (message.text or "").strip()
+    decision = decision_raw.lower()
+
+    if decision_raw == BTN_BROADCAST_EDIT:
+        await state.set_state(AdminBroadcastStates.waiting_text)
+        await message.answer(
+            "Пришли новый контент для этой же рассылки.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text=BTN_BROADCAST_CANCEL)]],
+                resize_keyboard=True,
+                input_field_placeholder="Отправь новый контент.",
+            ),
+        )
+        return
+
+    if decision_raw == BTN_BROADCAST_CANCEL:
         await state.clear()
-        await message.answer("Отменил рассылку.")
+        await message.answer("Ок, рассылку отменил.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
+        return
+
+    if decision not in {"да", "yes", "y", "send", "ok"} and decision_raw != BTN_BROADCAST_SEND:
+        await message.answer(
+            f"Нажми {BTN_BROADCAST_SEND}, {BTN_BROADCAST_EDIT} или {BTN_BROADCAST_CANCEL}.",
+            reply_markup=broadcast_confirm_menu(),
+        )
         return
     data = await state.get_data()
     payload_raw = data.get("broadcast_payload")
@@ -2292,9 +2497,9 @@ async def admin_broadcast_confirm(message: Message, state: FSMContext) -> None:
     segment = str(data.get("broadcast_segment", "all"))
     if not payload:
         await state.clear()
-        await message.answer("Нет контента рассылки. Запусти /admin_broadcast снова.")
+        await message.answer("Нет контента рассылки. Запусти /admin_broadcast снова.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
         return
-    await message.answer("Запускаю рассылку...")
+    await message.answer("Запускаю рассылку…")
     report = await _run_broadcast(
         message.bot,
         payload=payload,
@@ -2315,9 +2520,14 @@ async def admin_broadcast_confirm(message: Message, state: FSMContext) -> None:
                 f"• Блок: {report['blocked']}\n"
                 f"• Ошибки: {report['failed']}\n"
                 f"• Повторы: {report['retries']}\n"
-                f"• Топ-ошибка: {report['error_top'] or 'нет'}"
+                f"• Топ-ошибка: {report['error_top'] or 'нет'}\n\n"
+                "Дальше:\n"
+                "• /admin_runs — история запусков\n"
+                "• /admin_users — статус аудитории"
             ),
         )
+        ,
+        reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)),
     )
 
 
@@ -2329,50 +2539,71 @@ async def admin_panel_action(message: Message, state: FSMContext) -> None:
     if await _admin_command_in_state(message, state):
         return
     choice = (message.text or "").strip()
-    await state.clear()
-    if choice == "1":
+    choice_digit = _extract_choice_digit(choice) or choice
+    root_mode = _is_root_admin(message.from_user.id)
+
+    if choice in {BTN_BACK_MAIN, "0"}:
+        await state.clear()
+        await message.answer("Вышел из админ-панели.", reply_markup=main_menu(True))
+        return
+
+    if choice in {BTN_ADMIN_USERS, "1"} or choice_digit == "1":
+        await state.clear()
         await cmd_admin_users(message)
         return
-    if choice == "2":
+    if choice in {BTN_ADMIN_EVENTS, "2"} or choice_digit == "2":
+        await state.clear()
         await cmd_admin_events(message)
         return
-    if choice == "3":
+    if choice in {BTN_ADMIN_COST, "3"} or choice_digit == "3":
+        await state.clear()
         await cmd_admin_cost(message)
         return
-    if choice == "4":
+    if choice in {BTN_ADMIN_STATUS, "4"} or choice_digit == "4":
+        await state.clear()
         await cmd_admin_status(message)
         return
-    if choice == "5":
+    if choice in {BTN_ADMIN_BROADCAST, "5"} or choice_digit == "5":
+        await state.clear()
         await cmd_admin_broadcast(message, state)
         return
-    if choice == "6":
-        if not _is_root_admin(message.from_user.id):
+    if choice in {"➕ Выдать админку", "6"} or choice_digit == "6":
+        if not root_mode:
             await message.answer("Только root-админ может выдавать админку.")
             return
+        await state.clear()
         await cmd_admin_grant(message, state)
         return
-    if choice == "7":
-        if not _is_root_admin(message.from_user.id):
+    if choice in {"➖ Снять админку", "7"} or choice_digit == "7":
+        if not root_mode:
             await message.answer("Только root-админ может снимать админку.")
             return
+        await state.clear()
         await cmd_admin_revoke(message, state)
         return
-    if choice == "8":
+    if choice in {BTN_ADMIN_ADMINS, "8"} or choice_digit == "8":
+        await state.clear()
         await cmd_admin_list(message)
         return
-    if choice == "9":
-        if not _is_root_admin(message.from_user.id):
+    if choice in {"🧹 Очистка логов", "9"} or choice_digit == "9":
+        if not root_mode:
             await message.answer("Только root-админ может чистить логи.")
             return
+        await state.clear()
         await cmd_admin_cleanup(message)
         return
-    if choice == "10":
+    if choice in {BTN_ADMIN_HELP, "10"} or choice_digit == "10":
+        await state.clear()
         await cmd_helpa(message)
         return
-    if choice == "0":
-        await message.answer("Вышел из админ-панели.")
+    if choice in {BTN_ADMIN_RUNS}:
+        await state.clear()
+        await cmd_admin_runs(message)
         return
-    await message.answer("Неверный выбор. Запусти /admin_panel снова.")
+    await message.answer(
+        "Не понял действие. Нажми кнопку из админ-панели.",
+        reply_markup=admin_panel_menu(root_mode),
+    )
 
 
 @router.message(F.text.startswith("/"))
