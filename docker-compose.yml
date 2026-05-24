@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    container_name: tg-cognitive-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "bot.main"]

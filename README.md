@@ -1,20 +1,27 @@
-# TG Cognitive Distortion Bot (MVP)
+# TG Cognitive Distortion Bot
 
-Telegram-бот для разбора когнитивных искажений. Работает с текстом и голосовыми сообщениями.
+Telegram-бот для качественного разбора ситуаций и решений.
 
 ## Что умеет
 
-- `/razbor` — полный разбор ситуации (3-5 минут)
-- `/sos` — короткий протокол деэскалации (90 секунд)
-- `/checkin` — ежедневный чек-ин (настроение/стресс/энергия)
-- `/stats` — статистика по сессиям
-- `/cancel` — отмена текущего сценария
+- `/razbor` или кнопка `🧠 Разбор ситуации`
+- `/plan` или кнопка `🗺️ План действий`
+- `/audit` или кнопка `🧪 Проверка решения`
+- `/stats` или кнопка `📊 Мой прогресс`
+- `/reality` или кнопка `🧭 Reality Check`
 
-## Особенности
+## Что улучшено
 
-- Объективный режим по умолчанию
-- Формат: `факты -> интерпретации -> искажения -> прямой вывод -> шаг`
-- Поддержка voice/audio через OpenAI STT
+- Стиль ответов: структурированные карточки с понятными секциями.
+- Голосовые: поддержка voice/audio с более надежной обработкой и диагностикой ошибок.
+- Персональная память: учет истории пользователя, частых искажений и повторяющихся тем.
+- Четкое разделение глубины:
+  - Разбор — локальный кейс (24–72ч)
+  - Reality Check — системный аудит траектории (30–90д)
+- Авто-разбор: можно отправить текст/голос без команды.
+- Скрытая админ-аналитика расходов: учет LLM/STT затрат + авто-уведомления.
+- Скрытая админ-аналитика пользователей: кто активен, кто блокнул, что нажимают.
+- Ручная и ежедневная авто-рассылка.
 
 ## Переменные окружения
 
@@ -24,43 +31,69 @@ DB_PATH=data/bot.db
 OPENAI_API_KEY=твой_openai_api_key
 STT_MODEL=gpt-4o-mini-transcribe
 STT_LANGUAGE=ru
+ANALYSIS_MODEL=gpt-4.1-mini
+ADMIN_TG_ID=123456789
+ADMIN_NOTIFY_HOURS=09,21
+ADMIN_TIMEZONE=Europe/Prague
+COST_ALERT_SPIKE_PCT=50
+COST_ALERT_MIN_BASE_USD=0.25
+COST_SPIKE_WINDOW_HOURS=6
+BROADCAST_ENABLED=0
+BROADCAST_HOURS=10
+BROADCAST_TEXT=
+BROADCAST_INCLUDE_BLOCKED=0
+BROADCAST_MAX_RETRIES=2
+LLM_INPUT_COST_PER_1M=0.4
+LLM_OUTPUT_COST_PER_1M=1.6
+STT_COST_PER_MIN=0.006
 ```
+
+## Скрытый админ-контроль расходов
+
+- Пользователи это не видят.
+- Бот шлет тебе в личку (по `ADMIN_TG_ID`) сводку 2 раза в день (`ADMIN_NOTIFY_HOURS`).
+- Если расход за последние N часов вырос на `COST_ALERT_SPIKE_PCT` относительно предыдущего окна, приходит отдельный alert.
+- Ручные команды для админа:
+  - `/helpa` — список всех админ-команд
+  - `/admin_panel` — панель управления (выбор цифрой)
+  - `/admin_cost` — расходы
+  - `/admin_status` — статус + KPI
+  - `/admin_users` — кто активен/заблокирован
+  - `/admin_events` — кто что нажимает
+  - `/admin_runs` — последние запуски рассылки
+  - `/admin_broadcast` — рассылка вручную (текст/фото/фото+подпись/голос, с предпросмотром и подтверждением)
+  - `/admin_cleanup` — очистка старых логов
+  - `/admin_list` — список админов
+  - `/admin_grant` — выдать админку (root)
+  - `/admin_revoke` — снять админку (root)
+
+## Ежедневная рассылка
+
+- `BROADCAST_ENABLED=1` — включить.
+- `BROADCAST_HOURS=10` или `09,21` — часы по `ADMIN_TIMEZONE`.
+- `BROADCAST_TEXT=...` — текст рассылки.
+- `BROADCAST_INCLUDE_BLOCKED=0` — обычно `0`, чтобы не слать тем, кто уже заблокировал бота.
+- `BROADCAST_MAX_RETRIES=2` — сколько ретраев на временных ошибках доставки.
 
 ## Локальный запуск
 
 ```bash
-cd "/Users/ivan/Documents/temp bot/tg-cognitive-bot"
-python3 -m venv .venv
+cd "/Users/ivan/Documents/tg-cognitive-bot"
 source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
 python -m bot.main
 ```
 
-## Деплой на Render (24/7)
+## Авто-деплой на VPS (GitHub Actions)
 
-В проект уже добавлен `render.yaml` (Blueprint), поэтому деплой максимально простой.
+После добавления workflow `.github/workflows/deploy-vps.yml` деплой идет автоматически при пуше в `main`.
 
-1. Создай GitHub-репозиторий и залей туда папку проекта.
-2. В Render: `New +` -> `Blueprint`.
-3. Выбери этот GitHub-репозиторий.
-4. Render прочитает `render.yaml` и создаст Worker.
-5. В `Environment` у сервиса заполни:
-   - `BOT_TOKEN`
-   - `OPENAI_API_KEY`
-6. Нажми `Deploy`.
+Нужно один раз добавить Secrets в GitHub (Repo -> Settings -> Secrets and variables -> Actions):
 
-После старта в логах должна быть нормальная поллинг-работа без ошибок.
+- `VPS_HOST` — IP сервера (например `212.43.150.197`)
+- `VPS_USER` — `root`
+- `VPS_SSH_KEY` — приватный SSH-ключ для входа на VPS
 
-## Важное
+Проверка деплоя:
 
-- `DB_PATH` в Render уже направлен в `/var/data/bot.db` (persist disk), данные не потеряются при рестарте.
-- Если `OPENAI_API_KEY` не задан, бот продолжит работать, но попросит отправлять текст вместо голосовых.
-
-## Структура
-
-- `bot/main.py` — handlers, FSM, команды, прием голосовых
-- `bot/cognitive.py` — логика разбора
-- `bot/stt.py` — транскрибация voice/audio
-- `bot/db.py` — SQLite
-- `render.yaml` — деплой-конфиг Render
+- вкладка `Actions` в GitHub -> workflow `Deploy To VPS`
+- на сервере: `cd /root/tg-cognitive-bot && docker compose ps`

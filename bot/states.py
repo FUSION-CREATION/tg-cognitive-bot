@@ -2,21 +2,35 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class RazborStates(StatesGroup):
-    situation = State()
-    thought = State()
-    emotion_before = State()
-    emotion_after = State()
+    intake = State()
 
 
-class SosStates(StatesGroup):
-    trigger = State()
-    emotion_before = State()
-    thought = State()
-    emotion_after = State()
+class PlanStates(StatesGroup):
+    intake = State()
 
 
-class CheckinStates(StatesGroup):
-    mood = State()
-    stress = State()
-    energy = State()
-    note = State()
+class AuditStates(StatesGroup):
+    intake = State()
+
+
+class RealityStates(StatesGroup):
+    intake = State()
+
+
+class CrisisStates(StatesGroup):
+    followup = State()
+
+
+class AdminBroadcastStates(StatesGroup):
+    waiting_segment = State()
+    waiting_text = State()
+    waiting_confirm = State()
+
+
+class AdminAccessStates(StatesGroup):
+    waiting_grant_tg_id = State()
+    waiting_revoke_tg_id = State()
+
+
+class AdminPanelStates(StatesGroup):
+    waiting_action = State()
