@@ -415,6 +415,29 @@ def _admin_user_label(row: dict[str, Any]) -> str:
     return str(tg_id)
 
 
+async def _refresh_user_identity_from_telegram(bot: Bot, tg_id: int) -> bool:
+    try:
+        chat = await bot.get_chat(tg_id)
+    except (TelegramForbiddenError, TelegramBadRequest, Exception):
+        return False
+
+    username = getattr(chat, "username", None)
+    first_name = getattr(chat, "first_name", None)
+    last_name = getattr(chat, "last_name", None)
+    if not (username or first_name or last_name):
+        return False
+
+    STORAGE.upsert_user_identity(
+        tg_id=tg_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+        is_bot=False,
+        language_code=None,
+    )
+    return True
+
+
 def _extract_broadcast_payload(message: Message) -> dict[str, str] | None:
     if message.text and message.text.strip():
         return {"kind": "text", "text": message.text.strip()}
@@ -2232,6 +2255,19 @@ async def cmd_admin_users(message: Message) -> None:
     _touch_user(message.from_user, "cmd:admin_users")
     overview = STORAGE.get_admin_user_overview()
     rows = STORAGE.get_admin_user_rows(limit=20)
+
+    # Try to enrich missing usernames/names without requiring users to send /start again.
+    missing_identity_ids = [
+        int(row.get("tg_id") or 0)
+        for row in rows
+        if not str(row.get("username") or "").strip()
+    ]
+    for tg_id in missing_identity_ids:
+        if tg_id > 0:
+            await _refresh_user_identity_from_telegram(message.bot, tg_id)
+
+    if missing_identity_ids:
+        rows = STORAGE.get_admin_user_rows(limit=20)
     lines = []
     for row in rows:
         status = "🔴 блок" if int(row.get("is_blocked") or 0) == 1 else "🟢 ок"
