@@ -2253,7 +2253,6 @@ async def cmd_admin_users(message: Message) -> None:
                 ),
             ),
             section("🧾 Последние пользователи", details),
-            section("ℹ️ Ограничение Telegram", "Статус «выключил уведомления» недоступен через Bot API."),
         ]
     )
     await message.answer(text, reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
