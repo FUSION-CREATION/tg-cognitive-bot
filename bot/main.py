@@ -13,7 +13,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, User
 from dotenv import load_dotenv
 
 from bot.coach import ProductCoach
@@ -375,12 +375,44 @@ def _broadcast_segment_overview() -> str:
     return "\n".join(lines)
 
 
-def _touch_user(tg_id: int | None, event_type: str = "", payload: str = "") -> None:
+def _touch_user(subject: int | User | None, event_type: str = "", payload: str = "") -> None:
+    if subject is None:
+        return
+    tg_id: int | None = None
+    if isinstance(subject, int):
+        tg_id = subject
+    else:
+        tg_id = int(getattr(subject, "id", 0) or 0) or None
+
     if tg_id is None:
         return
+
+    if not isinstance(subject, int):
+        STORAGE.upsert_user_identity(
+            tg_id=tg_id,
+            username=getattr(subject, "username", None),
+            first_name=getattr(subject, "first_name", None),
+            last_name=getattr(subject, "last_name", None),
+            is_bot=bool(getattr(subject, "is_bot", False)),
+            language_code=getattr(subject, "language_code", None),
+        )
+
     STORAGE.mark_user_active(tg_id)
     if event_type:
         STORAGE.log_user_event(tg_id=tg_id, event_type=event_type, payload=payload)
+
+
+def _admin_user_label(row: dict[str, Any]) -> str:
+    username = str(row.get("username") or "").strip()
+    first_name = str(row.get("first_name") or "").strip()
+    last_name = str(row.get("last_name") or "").strip()
+    tg_id = int(row.get("tg_id") or 0)
+    if username:
+        return f"@{username} ({tg_id})"
+    full = " ".join(part for part in [first_name, last_name] if part).strip()
+    if full:
+        return f"{full} ({tg_id})"
+    return str(tg_id)
 
 
 def _extract_broadcast_payload(message: Message) -> dict[str, str] | None:
@@ -564,11 +596,11 @@ async def _run_broadcast(
 async def extract_user_text(message: Message) -> str | None:
     if message.from_user:
         if message.text and message.text.strip():
-            _touch_user(message.from_user.id, "incoming:text", f"len={len(message.text.strip())}")
+            _touch_user(message.from_user, "incoming:text", f"len={len(message.text.strip())}")
         elif message.voice:
-            _touch_user(message.from_user.id, "incoming:voice", f"duration={message.voice.duration or 0}")
+            _touch_user(message.from_user, "incoming:voice", f"duration={message.voice.duration or 0}")
         elif message.audio:
-            _touch_user(message.from_user.id, "incoming:audio", f"duration={message.audio.duration or 0}")
+            _touch_user(message.from_user, "incoming:audio", f"duration={message.audio.duration or 0}")
 
     if message.text and message.text.strip():
         return message.text.strip()
@@ -1549,7 +1581,7 @@ async def send_quick_analysis(message: Message, user_text: str, state: FSMContex
                 section("🔒 Шаг без компромиссов (24ч)", non_negotiable or "не указан"),
             ]
         )
-        _touch_user(message.from_user.id, "result:razbor", "llm")
+        _touch_user(message.from_user, "result:razbor", "llm")
         await message.answer(text)
         return
 
@@ -1575,7 +1607,7 @@ async def send_quick_analysis(message: Message, user_text: str, state: FSMContex
             section("✅ Следующий шаг", result["action"][:220]),
         ]
     )
-    _touch_user(message.from_user.id, "result:razbor", "fallback")
+    _touch_user(message.from_user, "result:razbor", "fallback")
     await message.answer(fallback_text)
 
 
@@ -1658,7 +1690,7 @@ async def _run_plan_flow(message: Message, state: FSMContext, user_text: str) ->
                 section("🚀 Первый шаг", _sanitize_style(first_step)),
             ]
         )
-        _touch_user(message.from_user.id, "result:plan", "llm")
+        _touch_user(message.from_user, "result:plan", "llm")
         await message.answer(text, reply_markup=main_menu(_is_admin(message.from_user.id)))
         return
 
@@ -1683,7 +1715,7 @@ async def _run_plan_flow(message: Message, state: FSMContext, user_text: str) ->
             section("⏱ На сегодня", plan.plan_today[:220]),
         ]
     )
-    _touch_user(message.from_user.id, "result:plan", "fallback")
+    _touch_user(message.from_user, "result:plan", "fallback")
     await message.answer(fallback_text, reply_markup=main_menu(_is_admin(message.from_user.id)))
 
 
@@ -1758,7 +1790,7 @@ async def _run_audit_flow(message: Message, state: FSMContext, user_text: str) -
                 section("➡️ Лучший следующий шаг", _sanitize_style(str(llm.get("best_next_step", "нет")))),
             ]
         )
-        _touch_user(message.from_user.id, "result:audit", "llm")
+        _touch_user(message.from_user, "result:audit", "llm")
         await message.answer(text, reply_markup=main_menu(_is_admin(message.from_user.id)))
         return
 
@@ -1783,14 +1815,14 @@ async def _run_audit_flow(message: Message, state: FSMContext, user_text: str) -
             section("➡️ Следующий шаг", result.next_step),
         ]
     )
-    _touch_user(message.from_user.id, "result:audit", "fallback")
+    _touch_user(message.from_user, "result:audit", "fallback")
     await message.answer(fallback_text, reply_markup=main_menu(_is_admin(message.from_user.id)))
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:start")
+    _touch_user(message.from_user, "cmd:start")
     STORAGE.get_stats(message.from_user.id)
     text = "\n\n".join(
         [
@@ -1813,7 +1845,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:cancel")
+    _touch_user(message.from_user, "cmd:cancel")
     await message.answer("Остановил текущий сценарий.", reply_markup=main_menu(_is_admin(message.from_user.id)))
 
 
@@ -1840,7 +1872,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def menu_button_router(message: Message, state: FSMContext) -> None:
     await state.clear()
     action = _resolve_menu_action(message.text or "")
-    _touch_user(message.from_user.id, "click:menu", action or (message.text or "")[:80])
+    _touch_user(message.from_user, "click:menu", action or (message.text or "")[:80])
     if action == "razbor":
         await cmd_razbor(message, state)
         return
@@ -1933,7 +1965,7 @@ async def admin_button_router(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_RAZBOR)
 async def cmd_razbor(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:razbor")
+    _touch_user(message.from_user, "cmd:razbor")
     await state.set_state(RazborStates.intake)
     await message.answer(
         "🧠 Разбор = один конкретный кейс (горизонт 24–72ч).\n"
@@ -1971,7 +2003,7 @@ async def crisis_followup(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_PLAN)
 async def cmd_plan(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:plan")
+    _touch_user(message.from_user, "cmd:plan")
     await state.set_state(PlanStates.intake)
     await message.answer(
         "🗺️ План действий = как дойти до цели по шагам.\n"
@@ -1995,7 +2027,7 @@ async def plan_intake(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_AUDIT)
 async def cmd_audit(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:audit")
+    _touch_user(message.from_user, "cmd:audit")
     await state.set_state(AuditStates.intake)
     await message.answer(
         "🧪 Проверка решения = идти в действие или тормозить.\n"
@@ -2019,7 +2051,7 @@ async def audit_intake(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_REALITY)
 async def cmd_reality(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _touch_user(message.from_user.id, "cmd:reality")
+    _touch_user(message.from_user, "cmd:reality")
     await state.set_state(RealityStates.intake)
     await message.answer(_reality_intake_prompt())
 
@@ -2090,7 +2122,7 @@ async def reality_intake(message: Message, state: FSMContext) -> None:
 @router.message(Command("stats"))
 @router.message(F.text == BTN_STATS)
 async def cmd_stats(message: Message) -> None:
-    _touch_user(message.from_user.id, "cmd:stats")
+    _touch_user(message.from_user, "cmd:stats")
     stats = STORAGE.get_stats(message.from_user.id)
     progress = STORAGE.get_progress_snapshot(message.from_user.id)
     reality = STORAGE.get_reality_profile(message.from_user.id) or {}
@@ -2162,7 +2194,7 @@ async def cmd_stats(message: Message) -> None:
 async def cmd_admin_cost(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_cost")
+    _touch_user(message.from_user, "cmd:admin_cost")
     await message.answer(_admin_cost_summary_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
@@ -2170,7 +2202,7 @@ async def cmd_admin_cost(message: Message) -> None:
 async def cmd_admin_status(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_status")
+    _touch_user(message.from_user, "cmd:admin_status")
     await message.answer(_admin_status_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
@@ -2178,7 +2210,7 @@ async def cmd_admin_status(message: Message) -> None:
 async def cmd_helpa(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:helpa")
+    _touch_user(message.from_user, "cmd:helpa")
     await message.answer(_admin_help_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
 
 
@@ -2187,7 +2219,7 @@ async def cmd_helpa(message: Message) -> None:
 async def cmd_admin_panel(message: Message, state: FSMContext) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_panel")
+    _touch_user(message.from_user, "cmd:admin_panel")
     await state.clear()
     await state.set_state(AdminPanelStates.waiting_action)
     await message.answer(_admin_panel_text(), reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
@@ -2197,7 +2229,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext) -> None:
 async def cmd_admin_users(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_users")
+    _touch_user(message.from_user, "cmd:admin_users")
     overview = STORAGE.get_admin_user_overview()
     rows = STORAGE.get_admin_user_rows(limit=20)
     lines = []
@@ -2205,7 +2237,8 @@ async def cmd_admin_users(message: Message) -> None:
         status = "🔴 блок" if int(row.get("is_blocked") or 0) == 1 else "🟢 ок"
         last_seen = str(row.get("last_seen_at") or "нет")
         last_event = str(row.get("last_event") or "нет")
-        lines.append(f"• {row['tg_id']} | {status} | seen: {last_seen} | evt: {last_event}")
+        user_label = _admin_user_label(row)
+        lines.append(f"• {user_label} | {status} | seen: {last_seen} | evt: {last_event}")
     details = "\n".join(lines) if lines else "• нет данных"
     text = "\n\n".join(
         [
@@ -2215,10 +2248,12 @@ async def cmd_admin_users(message: Message) -> None:
                     f"• Всего: {overview['users_total']}\n"
                     f"• Активны 24ч: {overview['active_24h']}\n"
                     f"• Активны 7д: {overview['active_7d']}\n"
+                    f"• Неактивны 7д: {overview['inactive_7d']}\n"
                     f"• Заблокировали бота: {overview['blocked_total']}"
                 ),
             ),
             section("🧾 Последние пользователи", details),
+            section("ℹ️ Ограничение Telegram", "Статус «выключил уведомления» недоступен через Bot API."),
         ]
     )
     await message.answer(text, reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
@@ -2228,10 +2263,14 @@ async def cmd_admin_users(message: Message) -> None:
 async def cmd_admin_events(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_events")
+    _touch_user(message.from_user, "cmd:admin_events")
     events = STORAGE.get_recent_user_events(limit=30, event_prefix="click:")
     lines = [
-        f"• {e['created_at']} | {e['tg_id']} | {e['event_type']} | {str(e.get('payload') or '')[:60]}"
+        (
+            f"• {e['created_at']} | "
+            f"{('@' + str(e.get('username')).strip()) if str(e.get('username') or '').strip() else str(e['tg_id'])} | "
+            f"{e['event_type']} | {str(e.get('payload') or '')[:60]}"
+        )
         for e in events
     ]
     text = section("🕹 Последние клики", "\n".join(lines) if lines else "• нет данных")
@@ -2242,7 +2281,7 @@ async def cmd_admin_events(message: Message) -> None:
 async def cmd_admin_runs(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_runs")
+    _touch_user(message.from_user, "cmd:admin_runs")
     runs = STORAGE.get_recent_broadcast_runs_summary(limit=5)
     if not runs:
         await message.answer("Рассылок пока не было.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
@@ -2270,7 +2309,7 @@ async def cmd_admin_runs(message: Message) -> None:
 async def cmd_admin_list(message: Message) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_list")
+    _touch_user(message.from_user, "cmd:admin_list")
     admins = STORAGE.list_admins(limit=50)
     if not admins:
         await message.answer("Список админов пуст.", reply_markup=admin_panel_menu(_is_root_admin(message.from_user.id)))
@@ -2286,7 +2325,7 @@ async def cmd_admin_list(message: Message) -> None:
 async def cmd_admin_grant(message: Message, state: FSMContext) -> None:
     if not _is_root_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_grant")
+    _touch_user(message.from_user, "cmd:admin_grant")
     await state.clear()
     await state.set_state(AdminAccessStates.waiting_grant_tg_id)
     await message.answer(
@@ -2317,7 +2356,7 @@ async def admin_grant_input(message: Message, state: FSMContext) -> None:
 async def cmd_admin_revoke(message: Message, state: FSMContext) -> None:
     if not _is_root_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_revoke")
+    _touch_user(message.from_user, "cmd:admin_revoke")
     await state.clear()
     await state.set_state(AdminAccessStates.waiting_revoke_tg_id)
     await message.answer(
@@ -2352,7 +2391,7 @@ async def admin_revoke_input(message: Message, state: FSMContext) -> None:
 async def cmd_admin_cleanup(message: Message) -> None:
     if not _is_root_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_cleanup")
+    _touch_user(message.from_user, "cmd:admin_cleanup")
     report = STORAGE.cleanup_old_admin_data(keep_days=45)
     await message.answer(
         section(
@@ -2373,7 +2412,7 @@ async def cmd_admin_cleanup(message: Message) -> None:
 async def cmd_admin_broadcast(message: Message, state: FSMContext) -> None:
     if not _is_admin(message.from_user.id):
         return
-    _touch_user(message.from_user.id, "cmd:admin_broadcast")
+    _touch_user(message.from_user, "cmd:admin_broadcast")
     await state.clear()
     await state.set_state(AdminBroadcastStates.waiting_segment)
     await message.answer(
@@ -2681,7 +2720,7 @@ async def admin_panel_action(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text.startswith("/"))
 async def unknown_command(message: Message) -> None:
-    _touch_user(message.from_user.id, "cmd:unknown", (message.text or "")[:80])
+    _touch_user(message.from_user, "cmd:unknown", (message.text or "")[:80])
     await message.answer("Не знаю такую команду. Нажми кнопку ниже или используй /start.", reply_markup=main_menu(_is_admin(message.from_user.id)))
 
 
@@ -2735,11 +2774,11 @@ async def fallback_auto_analyze(message: Message, state: FSMContext) -> None:
 
     route_mode = _auto_route_mode_for_free_text(user_text)
     if route_mode == "plan":
-        _touch_user(message.from_user.id, "auto_route", "plan")
+        _touch_user(message.from_user, "auto_route", "plan")
         await _run_plan_flow(message, state, user_text)
         return
     if route_mode == "audit":
-        _touch_user(message.from_user.id, "auto_route", "audit")
+        _touch_user(message.from_user, "auto_route", "audit")
         await _run_audit_flow(message, state, user_text)
         return
 

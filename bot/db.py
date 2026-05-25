@@ -37,6 +37,11 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tg_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    is_bot INTEGER DEFAULT 0,
+                    language_code TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
@@ -177,6 +182,23 @@ class Storage:
                 ON reality_checks(user_id, id DESC);
                 """
             )
+            self._ensure_users_schema_columns(conn)
+
+    def _ensure_users_schema_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        migrations = [
+            ("username", "ALTER TABLE users ADD COLUMN username TEXT"),
+            ("first_name", "ALTER TABLE users ADD COLUMN first_name TEXT"),
+            ("last_name", "ALTER TABLE users ADD COLUMN last_name TEXT"),
+            ("is_bot", "ALTER TABLE users ADD COLUMN is_bot INTEGER DEFAULT 0"),
+            ("language_code", "ALTER TABLE users ADD COLUMN language_code TEXT"),
+        ]
+        for column, ddl in migrations:
+            if column not in existing:
+                conn.execute(ddl)
 
     def _ensure_user(self, tg_id: int) -> int:
         with self._connect() as conn:
@@ -189,6 +211,53 @@ class Storage:
             )
             row = conn.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
             return int(row["id"])
+
+    def upsert_user_identity(
+        self,
+        tg_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        is_bot: bool | None = None,
+        language_code: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO users(tg_id, username, first_name, last_name, is_bot, language_code)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tg_id) DO UPDATE SET
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    username = CASE
+                        WHEN excluded.username IS NULL OR excluded.username = '' THEN users.username
+                        ELSE excluded.username
+                    END,
+                    first_name = CASE
+                        WHEN excluded.first_name IS NULL OR excluded.first_name = '' THEN users.first_name
+                        ELSE excluded.first_name
+                    END,
+                    last_name = CASE
+                        WHEN excluded.last_name IS NULL OR excluded.last_name = '' THEN users.last_name
+                        ELSE excluded.last_name
+                    END,
+                    is_bot = CASE
+                        WHEN excluded.is_bot IS NULL THEN users.is_bot
+                        ELSE excluded.is_bot
+                    END,
+                    language_code = CASE
+                        WHEN excluded.language_code IS NULL OR excluded.language_code = '' THEN users.language_code
+                        ELSE excluded.language_code
+                    END
+                """,
+                (
+                    int(tg_id),
+                    (username or "").strip()[:64] or None,
+                    (first_name or "").strip()[:128] or None,
+                    (last_name or "").strip()[:128] or None,
+                    int(bool(is_bot)) if is_bot is not None else None,
+                    (language_code or "").strip()[:16] or None,
+                ),
+            )
 
     def save_session(
         self,
@@ -588,12 +657,15 @@ class Storage:
                      WHERE datetime(COALESCE(s.last_seen_at, u.last_seen_at)) >= datetime('now', '-24 hours')) AS active_24h
                 """
             ).fetchone()
-        return dict(row) if row else {
+        data = dict(row) if row else {
             "users_total": 0,
             "blocked_total": 0,
             "active_7d": 0,
             "active_24h": 0,
+            "inactive_7d": 0,
         }
+        data["inactive_7d"] = max(0, int(data["users_total"]) - int(data["active_7d"]))
+        return data
 
     def get_admin_user_rows(self, limit: int = 30) -> list[dict]:
         with self._connect() as conn:
@@ -601,6 +673,9 @@ class Storage:
                 """
                 SELECT
                     u.tg_id,
+                    u.username,
+                    u.first_name,
+                    u.last_name,
                     COALESCE(s.is_blocked, 0) AS is_blocked,
                     COALESCE(s.last_seen_at, u.last_seen_at) AS last_seen_at,
                     s.last_delivery_ok_at,
@@ -627,10 +702,11 @@ class Storage:
             if event_prefix:
                 rows = conn.execute(
                     """
-                    SELECT tg_id, event_type, payload, created_at
-                    FROM user_events
-                    WHERE event_type LIKE ?
-                    ORDER BY id DESC
+                    SELECT e.tg_id, u.username, u.first_name, u.last_name, e.event_type, e.payload, e.created_at
+                    FROM user_events e
+                    LEFT JOIN users u ON u.id = e.user_id
+                    WHERE e.event_type LIKE ?
+                    ORDER BY e.id DESC
                     LIMIT ?
                     """,
                     (f"{event_prefix}%", int(limit)),
@@ -638,9 +714,10 @@ class Storage:
             else:
                 rows = conn.execute(
                     """
-                    SELECT tg_id, event_type, payload, created_at
-                    FROM user_events
-                    ORDER BY id DESC
+                    SELECT e.tg_id, u.username, u.first_name, u.last_name, e.event_type, e.payload, e.created_at
+                    FROM user_events e
+                    LEFT JOIN users u ON u.id = e.user_id
+                    ORDER BY e.id DESC
                     LIMIT ?
                     """,
                     (int(limit),),
