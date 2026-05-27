@@ -180,6 +180,28 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_reality_checks_user_id
                 ON reality_checks(user_id, id DESC);
+
+                CREATE TABLE IF NOT EXISTS daily_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    tg_id INTEGER NOT NULL,
+                    report_date TEXT NOT NULL,
+                    source_text TEXT,
+                    sleep_hours REAL,
+                    steps INTEGER,
+                    water_l REAL,
+                    workout_done INTEGER,
+                    focus_minutes INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reports_user_date
+                ON daily_reports(user_id, report_date);
+
+                CREATE INDEX IF NOT EXISTS idx_daily_reports_user_updated
+                ON daily_reports(user_id, updated_at DESC);
                 """
             )
             self._ensure_users_schema_columns(conn)
@@ -1043,6 +1065,93 @@ class Storage:
             "badges": badges,
             "recent_focus": recent_focus,
         }
+
+    def save_daily_report(
+        self,
+        tg_id: int,
+        report_date: str,
+        source_text: str,
+        sleep_hours: float | None = None,
+        steps: int | None = None,
+        water_l: float | None = None,
+        workout_done: bool | None = None,
+        focus_minutes: int | None = None,
+    ) -> None:
+        user_id = self._ensure_user(tg_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_reports(
+                    user_id, tg_id, report_date, source_text,
+                    sleep_hours, steps, water_l, workout_done, focus_minutes,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, report_date) DO UPDATE SET
+                    tg_id = excluded.tg_id,
+                    source_text = excluded.source_text,
+                    sleep_hours = excluded.sleep_hours,
+                    steps = excluded.steps,
+                    water_l = excluded.water_l,
+                    workout_done = excluded.workout_done,
+                    focus_minutes = excluded.focus_minutes,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    int(user_id),
+                    int(tg_id),
+                    (report_date or "")[:10],
+                    (source_text or "")[:4000],
+                    float(sleep_hours) if sleep_hours is not None else None,
+                    int(steps) if steps is not None else None,
+                    float(water_l) if water_l is not None else None,
+                    int(bool(workout_done)) if workout_done is not None else None,
+                    int(focus_minutes) if focus_minutes is not None else None,
+                ),
+            )
+
+    def get_daily_report(self, tg_id: int, report_date: str) -> dict | None:
+        user_id = self._ensure_user(tg_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT report_date, sleep_hours, steps, water_l, workout_done, focus_minutes, updated_at
+                FROM daily_reports
+                WHERE user_id = ? AND report_date = ?
+                LIMIT 1
+                """,
+                (int(user_id), (report_date or "")[:10]),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_daily_report(self, tg_id: int) -> dict | None:
+        user_id = self._ensure_user(tg_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT report_date, sleep_hours, steps, water_l, workout_done, focus_minutes, updated_at
+                FROM daily_reports
+                WHERE user_id = ?
+                ORDER BY report_date DESC, id DESC
+                LIMIT 1
+                """,
+                (int(user_id),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_daily_reports_last_days(self, tg_id: int, days: int = 7) -> list[dict]:
+        user_id = self._ensure_user(tg_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT report_date, sleep_hours, steps, water_l, workout_done, focus_minutes, updated_at
+                FROM daily_reports
+                WHERE user_id = ?
+                  AND date(report_date) >= date('now', ?)
+                ORDER BY report_date DESC
+                """,
+                (int(user_id), f"-{int(days)} days"),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_last_session(
         self,

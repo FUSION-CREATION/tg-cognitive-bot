@@ -27,6 +27,7 @@ from bot.states import (
     AuditStates,
     CrisisStates,
     PlanStates,
+    ProgressReportStates,
     RealityStates,
     RazborStates,
 )
@@ -54,6 +55,7 @@ BTN_PLAN = "🗺️ План действий"
 BTN_AUDIT = "🧪 Проверка решения"
 BTN_REALITY = "🧭 Reality Check"
 BTN_STATS = "📊 Мой прогресс"
+BTN_REPORT = "📝 Отчитаться"
 BTN_ADMIN_PANEL = "🛠 Админ-панель"
 BTN_ADMIN_BROADCAST = "📣 Рассылка"
 BTN_ADMIN_USERS = "👥 Пользователи"
@@ -133,6 +135,11 @@ MENU_ALIAS_MAP: dict[str, str] = {
     "мой прогресс": "stats",
     "прогресс": "stats",
     "/stats": "stats",
+    BTN_REPORT.lower(): "report",
+    "отчитаться": "report",
+    "отчет": "report",
+    "отчёт": "report",
+    "/report": "report",
     BTN_ADMIN_PANEL.lower(): "admin_panel",
     "админ панель": "admin_panel",
     "/admin": "admin_panel",
@@ -152,7 +159,7 @@ def main_menu(include_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BTN_RAZBOR), KeyboardButton(text=BTN_PLAN)],
         [KeyboardButton(text=BTN_AUDIT), KeyboardButton(text=BTN_REALITY)],
-        [KeyboardButton(text=BTN_STATS)],
+        [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_REPORT)],
     ]
     if include_admin:
         rows.append([KeyboardButton(text=BTN_ADMIN_PANEL)])
@@ -1420,6 +1427,120 @@ def _progress_next_step(progress: dict) -> str:
     return "Возьми последнюю проблему и доведи ее до результата: разбор -> план -> аудит."
 
 
+def _parse_progress_report_text(text: str) -> dict[str, Any]:
+    raw = (text or "").strip()
+    low = raw.lower()
+
+    def _pick_float(patterns: list[str]) -> float | None:
+        for p in patterns:
+            m = re.search(p, low, flags=re.IGNORECASE)
+            if m:
+                try:
+                    return float(m.group(1).replace(",", "."))
+                except Exception:
+                    continue
+        return None
+
+    def _pick_int(patterns: list[str]) -> int | None:
+        for p in patterns:
+            m = re.search(p, low, flags=re.IGNORECASE)
+            if m:
+                val = m.group(1).replace(" ", "").lower()
+                try:
+                    if val.endswith("k"):
+                        return int(float(val[:-1].replace(",", ".")) * 1000)
+                    return int(float(val.replace(",", ".")))
+                except Exception:
+                    continue
+        return None
+
+    sleep_hours = _pick_float(
+        [
+            r"(?:сон|sleep)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:ч|час|h)?",
+            r"(\d+(?:[.,]\d+)?)\s*(?:ч|час)\s*(?:сна)?",
+        ]
+    )
+    steps = _pick_int(
+        [
+            r"(?:шаги|steps)\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?k?)",
+            r"([0-9]{3,6})\s*(?:шаг|шагов|steps)",
+        ]
+    )
+    water_l = _pick_float(
+        [
+            r"(?:вода|water)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:л|литр|l)",
+            r"(\d+(?:[.,]\d+)?)\s*(?:л|литр|l)\s*(?:воды)?",
+        ]
+    )
+    focus_minutes = _pick_int(
+        [
+            r"(?:фокус|deep|глубокая работа|концентрация)\s*[:=]?\s*([0-9]+)",
+            r"([0-9]+)\s*(?:мин|м)\s*(?:фокус|deep|работы)?",
+        ]
+    )
+
+    workout_done: bool | None = None
+    if re.search(r"(?:трен|зал|workout|gym)\s*[:=]?\s*(?:да|был|сделал|yes|done|\+)", low):
+        workout_done = True
+    elif re.search(r"(?:трен|зал|workout|gym)\s*[:=]?\s*(?:нет|no|skip|пропустил|-)", low):
+        workout_done = False
+    elif "без трен" in low or "не трениров" in low:
+        workout_done = False
+    elif "треня" in low or "был в зале" in low:
+        workout_done = True
+
+    fields_filled = sum(
+        int(x is not None)
+        for x in [sleep_hours, steps, water_l, workout_done, focus_minutes]
+    )
+
+    return {
+        "sleep_hours": sleep_hours,
+        "steps": steps,
+        "water_l": water_l,
+        "workout_done": workout_done,
+        "focus_minutes": focus_minutes,
+        "fields_filled": fields_filled,
+        "source_text": raw,
+    }
+
+
+def _report_completion_score(report: dict[str, Any]) -> int:
+    return sum(
+        int(report.get(k) is not None)
+        for k in ["sleep_hours", "steps", "water_l", "workout_done", "focus_minutes"]
+    )
+
+
+def _progress_focus_next_day(report: dict[str, Any], week_rows: list[dict[str, Any]]) -> str:
+    missing = []
+    if report.get("sleep_hours") is None:
+        missing.append("сон")
+    if report.get("steps") is None:
+        missing.append("шаги")
+    if report.get("water_l") is None:
+        missing.append("вода")
+    if report.get("workout_done") is None:
+        missing.append("треня")
+    if report.get("focus_minutes") is None:
+        missing.append("фокус")
+    if missing:
+        return f"Заполни до конца отчет: добавь {', '.join(missing[:2])}."
+
+    avg_fill = 0.0
+    if week_rows:
+        avg_fill = sum(_report_completion_score(r) for r in week_rows) / (len(week_rows) * 5)
+    if avg_fill < 0.65:
+        return "Стабилизируй ритм: 1 полный отчет каждый день 7 дней подряд."
+    if int(report.get("steps") or 0) < 7000:
+        return "Подними базу активности: завтра цель 7 000+ шагов."
+    if float(report.get("water_l") or 0) < 1.8:
+        return "Добери воду: завтра минимум 1.8л без догонялова утром."
+    if int(report.get("focus_minutes") or 0) < 45:
+        return "Добавь 1 фокус-блок 45 минут без отвлечений."
+    return "Удержи темп: повтори сегодняшний уровень без рывка."
+
+
 def _build_spike_alert(now_utc: datetime) -> str | None:
     current_start = now_utc - timedelta(hours=COST_SPIKE_WINDOW_HOURS)
     prev_start = now_utc - timedelta(hours=COST_SPIKE_WINDOW_HOURS * 2)
@@ -1859,7 +1980,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             "🧭 Reality Check — аудит траектории\n"
             "🗺️ План — шаги до результата\n"
             "🧪 Проверка — GO / NO-GO\n"
-            "📊 Прогресс — реальные изменения",
+            "📊 Прогресс — реальные изменения\n"
+            "📝 Отчитаться — ежедневный план-факт",
         ]
     )
     await message.answer(text, reply_markup=main_menu(_is_admin(message.from_user.id)))
@@ -1873,7 +1995,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 
 @router.message(
-    F.text.in_([BTN_RAZBOR, BTN_PLAN, BTN_AUDIT, BTN_REALITY, BTN_STATS])
+    F.text.in_([BTN_RAZBOR, BTN_PLAN, BTN_AUDIT, BTN_REALITY, BTN_STATS, BTN_REPORT])
     | F.text.lower().in_(
         [
             "разбор",
@@ -1889,6 +2011,9 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
             "проверка реальности",
             "прогресс",
             "мой прогресс",
+            "отчитаться",
+            "отчет",
+            "отчёт",
         ]
     )
 )
@@ -1910,6 +2035,9 @@ async def menu_button_router(message: Message, state: FSMContext) -> None:
         return
     if action == "stats":
         await cmd_stats(message)
+        return
+    if action == "report":
+        await cmd_report(message, state)
         return
     if action == "admin_panel" and _is_admin(message.from_user.id):
         await cmd_admin_panel(message, state)
@@ -2146,52 +2274,74 @@ async def reality_intake(message: Message, state: FSMContext) -> None:
 @router.message(F.text == BTN_STATS)
 async def cmd_stats(message: Message) -> None:
     _touch_user(message.from_user, "cmd:stats")
-    stats = STORAGE.get_stats(message.from_user.id)
     progress = STORAGE.get_progress_snapshot(message.from_user.id)
     reality = STORAGE.get_reality_profile(message.from_user.id) or {}
-    mode_rank = sorted(progress["mode_counts"].items(), key=lambda x: x[1], reverse=True)[:3]
-    mode_rank_text = format_list([f"{_mode_label(m)}: {c}" for m, c in mode_rank]) if mode_rank else "• пока нет"
-    top_dist_text = ", ".join(progress["top_distortions"]) if progress["top_distortions"] else "нет явного паттерна"
-    badges_text = " • ".join(progress["badges"]) if progress["badges"] else "пока нет"
-    recent_focus = format_list(
-        [f"{_mode_label(item['mode'])}: {item['line']}" for item in progress["recent_focus"][:3]]
-    ) if progress["recent_focus"] else "• пока нет данных"
 
-    level, inside, target = _next_level_progress(progress["sessions_total"])
-    bar = _progress_bar(inside, target)
-    score = int(progress["sessions_total"] * 10 + progress["streak_days"] * 5 + progress["active_days_7d"] * 7)
-    discipline = max(0, min(100, int(progress["active_days_7d"] * 11 + min(progress["streak_days"], 7) * 3)))
-    avg_delta = stats["avg_delta"] if stats["avg_delta"] is not None else "нет данных"
-    challenge = _weekly_challenge(progress, mode_rank)
-    next_step = _progress_next_step(progress)
+    today = datetime.now(ADMIN_TZ).date().isoformat()
+    today_report = STORAGE.get_daily_report(message.from_user.id, today)
+    latest_report = STORAGE.get_latest_daily_report(message.from_user.id)
+    report_for_focus = today_report or latest_report or {}
+    week_rows = STORAGE.get_daily_reports_last_days(message.from_user.id, days=7)
+
+    week_reports = len(week_rows)
+    week_fill_scores = [_report_completion_score(r) for r in week_rows]
+    avg_fill_pct = round((sum(week_fill_scores) / (max(1, week_reports) * 5)) * 100)
+    workouts_7d = sum(int(bool(r.get("workout_done"))) for r in week_rows if r.get("workout_done") is not None)
+    steps_vals = [int(r["steps"]) for r in week_rows if r.get("steps") is not None]
+    water_vals = [float(r["water_l"]) for r in week_rows if r.get("water_l") is not None]
+    focus_vals = [int(r["focus_minutes"]) for r in week_rows if r.get("focus_minutes") is not None]
+
+    avg_steps = int(sum(steps_vals) / len(steps_vals)) if steps_vals else 0
+    avg_water = round(sum(water_vals) / len(water_vals), 1) if water_vals else 0.0
+    avg_focus = int(sum(focus_vals) / len(focus_vals)) if focus_vals else 0
+
+    today_line = "• Отчет за сегодня не заполнен"
+    if today_report:
+        done = _report_completion_score(today_report)
+        sleep = today_report.get("sleep_hours")
+        steps = today_report.get("steps")
+        water = today_report.get("water_l")
+        workout = today_report.get("workout_done")
+        focus = today_report.get("focus_minutes")
+        today_line = (
+            f"• Выполнено: {done}/5\n"
+            f"• Сон: {sleep if sleep is not None else '—'}ч | Шаги: {steps if steps is not None else '—'}\n"
+            f"• Вода: {water if water is not None else '—'}л | Треня: {'да' if workout else 'нет' if workout is not None else '—'}\n"
+            f"• Фокус: {focus if focus is not None else '—'} мин"
+        )
+
+    next_step = _progress_focus_next_day(report_for_focus, week_rows)
     reality_quality = int(reality.get("profile_quality", 0) or 0)
-    reality_updated = str(reality.get("updated_at", "") or "нет")
-    target_daily_sessions = max(1, 7 - int(progress["sessions_7d"]))
-    weekly_pace = "в норме" if progress["sessions_7d"] >= 7 else "ниже цели"
+    reality_updated = str(reality.get("updated_at", "") or "нет данных")
+    weekly_pace = "держишь ритм" if week_reports >= 5 else "ритм ниже цели"
+    sessions_7d = int(progress.get("sessions_7d", 0))
+    active_days_7d = int(progress.get("active_days_7d", 0))
 
     text = "\n\n".join(
         [
             section(
-                "🏆 Сводка прогресса",
-                (
-                    f"• Очки: {score}\n"
-                    f"• Уровень {level}: {bar} ({inside}/{target})\n"
-                    f"• Серия: {progress['streak_days']} дн.\n"
-                    f"• Индекс дисциплины: {discipline}/100"
-                ),
+                "📍 Сегодня (план-факт)",
+                today_line,
             ),
             section(
                 "📅 Неделя",
                 (
-                    f"• Сессий: {progress['sessions_7d']}\n"
-                    f"• Активных дней: {progress['active_days_7d']}/7\n"
-                    f"• Среднее снижение эмоции: {avg_delta}\n"
+                    f"• Отчеты: {week_reports}/7\n"
+                    f"• Заполненность отчетов: {avg_fill_pct}%\n"
+                    f"• Тренировок: {workouts_7d}\n"
+                    f"• Средние шаги: {avg_steps if avg_steps else 'нет данных'}\n"
                     f"• Темп: {weekly_pace}"
                 ),
             ),
-            section("🎯 Рабочие режимы", mode_rank_text),
-            section("🧠 Главный паттерн искажений", top_dist_text),
-            section("🛠 Последний фокус", recent_focus),
+            section(
+                "📈 Тренд",
+                (
+                    f"• Вода ср.: {avg_water if avg_water else 'нет данных'}л\n"
+                    f"• Фокус ср.: {avg_focus if avg_focus else 'нет данных'} мин\n"
+                    f"• Сессии бота 7д: {sessions_7d}\n"
+                    f"• Активные дни в боте 7д: {active_days_7d}"
+                ),
+            ),
             section(
                 "🧭 Reality профиль",
                 (
@@ -2199,18 +2349,97 @@ async def cmd_stats(message: Message) -> None:
                     f"• Обновлен: {reality_updated}"
                 ),
             ),
-            section("📌 Приоритет на сегодня", next_step),
-            section(
-                "🎯 Цель до конца недели",
-                (
-                    f"• {challenge}\n"
-                    f"• Чтобы выйти в ритм: минимум {target_daily_sessions} сесс. до конца недели"
-                ),
-            ),
-            section("🎖 Бейджи", badges_text),
+            section("🎯 Фокус на завтра", next_step),
+            section("📝 Как отчитываться", "Нажми «📝 Отчитаться» и пришли одной строкой: сон 7ч, шаги 8000, вода 1.8л, треня да, фокус 45м."),
         ]
     )
-    await message.answer(text)
+    await message.answer(text, reply_markup=main_menu(_is_admin(message.from_user.id)))
+
+
+@router.message(Command("report"))
+@router.message(F.text == BTN_REPORT)
+async def cmd_report(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    _touch_user(message.from_user, "cmd:report")
+    await state.set_state(ProgressReportStates.intake)
+    await message.answer(
+        "📝 Отчет за день.\n"
+        "Пришли одним сообщением (текстом или голосом):\n"
+        "сон 7ч, шаги 8200, вода 1.8л, треня да/нет, фокус 45м"
+    )
+
+
+@router.message(ProgressReportStates.intake)
+async def progress_report_intake(message: Message, state: FSMContext) -> None:
+    user_text = await extract_user_text(message)
+    if user_text is None:
+        return
+
+    if await _handle_crisis_message(message, state, user_text):
+        return
+
+    parsed = _parse_progress_report_text(user_text)
+    if int(parsed.get("fields_filled", 0)) == 0:
+        await message.answer(
+            "Не вижу метрик в отчете.\n"
+            "Шаблон: сон 7ч, шаги 8200, вода 1.8л, треня да/нет, фокус 45м"
+        )
+        return
+
+    report_date = datetime.now(ADMIN_TZ).date().isoformat()
+    STORAGE.save_daily_report(
+        tg_id=message.from_user.id,
+        report_date=report_date,
+        source_text=str(parsed.get("source_text", "")),
+        sleep_hours=parsed.get("sleep_hours"),
+        steps=parsed.get("steps"),
+        water_l=parsed.get("water_l"),
+        workout_done=parsed.get("workout_done"),
+        focus_minutes=parsed.get("focus_minutes"),
+    )
+
+    today_report = STORAGE.get_daily_report(message.from_user.id, report_date) or {}
+    week_rows = STORAGE.get_daily_reports_last_days(message.from_user.id, days=7)
+    done = _report_completion_score(today_report)
+    missing: list[str] = []
+    if today_report.get("sleep_hours") is None:
+        missing.append("сон")
+    if today_report.get("steps") is None:
+        missing.append("шаги")
+    if today_report.get("water_l") is None:
+        missing.append("воду")
+    if today_report.get("workout_done") is None:
+        missing.append("треню")
+    if today_report.get("focus_minutes") is None:
+        missing.append("фокус")
+
+    focus_next = _progress_focus_next_day(today_report, week_rows)
+    week_fill_scores = [_report_completion_score(r) for r in week_rows]
+    avg_fill_pct = round((sum(week_fill_scores) / (max(1, len(week_rows)) * 5)) * 100)
+
+    await state.clear()
+    _touch_user(message.from_user, "result:report", f"done={done}")
+    await message.answer(
+        "\n\n".join(
+            [
+                section(
+                    "✅ Отчет принят",
+                    (
+                        f"• Заполнено: {done}/5\n"
+                        f"• Сон: {today_report.get('sleep_hours', '—')}ч\n"
+                        f"• Шаги: {today_report.get('steps', '—')}\n"
+                        f"• Вода: {today_report.get('water_l', '—')}л\n"
+                        f"• Треня: {'да' if today_report.get('workout_done') else 'нет' if today_report.get('workout_done') is not None else '—'}\n"
+                        f"• Фокус: {today_report.get('focus_minutes', '—')} мин"
+                    ),
+                ),
+                section("📅 Неделя", f"• Отчетов: {len(week_rows)}/7\n• Заполненность: {avg_fill_pct}%"),
+                section("📌 Что добавить", format_list(missing[:3]) if missing else "• отчет заполнен полностью"),
+                section("🎯 Следующий шаг", focus_next),
+            ]
+        ),
+        reply_markup=main_menu(_is_admin(message.from_user.id)),
+    )
 
 
 @router.message(Command("admin_cost"))
@@ -2779,6 +3008,9 @@ async def fallback_auto_analyze(message: Message, state: FSMContext) -> None:
     menu_action = _resolve_menu_action(user_text)
     if menu_action == "stats":
         await cmd_stats(message)
+        return
+    if menu_action == "report":
+        await cmd_report(message, state)
         return
     if menu_action == "admin_panel" and _is_admin(message.from_user.id):
         await cmd_admin_panel(message, state)
