@@ -17,10 +17,6 @@ class RealityStates(StatesGroup):
     intake = State()
 
 
-class ProgressReportStates(StatesGroup):
-    intake = State()
-
-
 class CrisisStates(StatesGroup):
     followup = State()
 
